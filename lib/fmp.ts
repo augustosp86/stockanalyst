@@ -120,6 +120,19 @@ export async function getIncomeStatements(ticker: string) {
   } catch { return [] }
 }
 
+export async function getNews(ticker: string) {
+  try {
+    const data = await yf(`/v1/finance/search?q=${ticker}&newsCount=15&quotesCount=0`, YF_BASE2)
+    return (data?.news ?? []).slice(0, 15).map((n: any) => ({
+      title: n.title,
+      url: n.link,
+      site: n.publisher,
+      publishedDate: new Date(n.providerPublishTime * 1000).toISOString(),
+      text: '',
+    }))
+  } catch { return [] }
+}
+
 export async function getAnalystRatings(ticker: string) {
   try {
     const data = await yf(`/v11/finance/quoteSummary/${ticker}?modules=recommendationTrend`)
