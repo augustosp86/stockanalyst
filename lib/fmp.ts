@@ -44,29 +44,30 @@ export async function getQuote(ticker: string) {
 
 export async function getProfile(ticker: string) {
   try {
-    const data = await yf(`/v10/finance/quoteSummary/${ticker}?modules=assetProfile,price,summaryDetail`)
-    const profile = data?.quoteSummary?.result?.[0]
-    const asset = profile?.assetProfile
-    const price = profile?.price
-    const summary = profile?.summaryDetail
-    if (!asset) return null
+    const data = await yf(`/v11/finance/quoteSummary/${ticker}?modules=assetProfile%2Cprice%2CsummaryDetail%2CdefaultKeyStatistics`)
+    const result = data?.quoteSummary?.result?.[0]
+    const asset = result?.assetProfile
+    const price = result?.price
+    const summary = result?.summaryDetail
+    const ks = result?.defaultKeyStatistics
+    if (!price) return null
     return {
       symbol: ticker,
       companyName: price?.longName ?? price?.shortName ?? ticker,
-      sector: asset.sector ?? '',
-      industry: asset.industry ?? '',
-      country: asset.country ?? '',
-      ceo: asset.companyOfficers?.[0]?.name ?? '',
-      fullTimeEmployees: asset.fullTimeEmployees ?? 0,
-      website: asset.website ?? '',
-      description: asset.longBusinessSummary ?? '',
-      image: `https://logo.clearbit.com/${asset.website?.replace('https://', '').replace('http://', '').split('/')[0]}`,
+      sector: asset?.sector ?? '',
+      industry: asset?.industry ?? '',
+      country: asset?.country ?? '',
+      ceo: asset?.companyOfficers?.[0]?.name ?? '',
+      fullTimeEmployees: asset?.fullTimeEmployees ?? 0,
+      website: asset?.website ?? '',
+      description: asset?.longBusinessSummary ?? '',
+      image: `https://logo.clearbit.com/${(asset?.website ?? '').replace('https://', '').replace('http://', '').split('/')[0]}`,
       ipoDate: '',
       exchange: price?.exchangeName ?? '',
       currency: price?.currency ?? 'USD',
       marketCap: price?.marketCap?.raw ?? 0,
       pe: summary?.trailingPE?.raw ?? null,
-      eps: summary?.trailingEps?.raw ?? null,
+      eps: ks?.trailingEps?.raw ?? null,
       beta: summary?.beta?.raw ?? null,
       yearHigh: summary?.fiftyTwoWeekHigh?.raw ?? 0,
       yearLow: summary?.fiftyTwoWeekLow?.raw ?? 0,
@@ -75,25 +76,9 @@ export async function getProfile(ticker: string) {
   } catch { return null }
 }
 
-export async function getIncomeStatements(ticker: string) {
-  try {
-    const data = await yf(`/v10/finance/quoteSummary/${ticker}?modules=incomeStatementHistory,earningsHistory`)
-    const stmts = data?.quoteSummary?.result?.[0]?.incomeStatementHistory?.incomeStatementHistory ?? []
-    return stmts.slice(0, 5).map((s: any) => ({
-      date: s.endDate?.fmt ?? '',
-      revenue: s.totalRevenue?.raw ?? 0,
-      grossProfit: s.grossProfit?.raw ?? 0,
-      operatingIncome: s.operatingIncome?.raw ?? 0,
-      netIncome: s.netIncome?.raw ?? 0,
-      eps: s.dilutedEPS?.raw ?? 0,
-      ebitda: s.ebitda?.raw ?? 0,
-    }))
-  } catch { return [] }
-}
-
 export async function getRatios(ticker: string) {
   try {
-    const data = await yf(`/v10/finance/quoteSummary/${ticker}?modules=financialData,defaultKeyStatistics,summaryDetail`)
+    const data = await yf(`/v11/finance/quoteSummary/${ticker}?modules=financialData%2CdefaultKeyStatistics%2CsummaryDetail`)
     const r = data?.quoteSummary?.result?.[0]
     const fd = r?.financialData
     const ks = r?.defaultKeyStatistics
@@ -119,22 +104,25 @@ export async function getRatios(ticker: string) {
   } catch { return null }
 }
 
-export async function getNews(ticker: string) {
+export async function getIncomeStatements(ticker: string) {
   try {
-    const data = await yf(`/v1/finance/search?q=${ticker}&newsCount=15&quotesCount=0`, YF_BASE2)
-    return (data?.news ?? []).slice(0, 15).map((n: any) => ({
-      title: n.title,
-      url: n.link,
-      site: n.publisher,
-      publishedDate: new Date(n.providerPublishTime * 1000).toISOString(),
-      text: '',
+    const data = await yf(`/v11/finance/quoteSummary/${ticker}?modules=incomeStatementHistory`)
+    const stmts = data?.quoteSummary?.result?.[0]?.incomeStatementHistory?.incomeStatementHistory ?? []
+    return stmts.slice(0, 5).map((s: any) => ({
+      date: s.endDate?.fmt ?? '',
+      revenue: s.totalRevenue?.raw ?? 0,
+      grossProfit: s.grossProfit?.raw ?? 0,
+      operatingIncome: s.operatingIncome?.raw ?? 0,
+      netIncome: s.netIncome?.raw ?? 0,
+      eps: s.dilutedEPS?.raw ?? 0,
+      ebitda: s.ebitda?.raw ?? 0,
     }))
   } catch { return [] }
 }
 
 export async function getAnalystRatings(ticker: string) {
   try {
-    const data = await yf(`/v10/finance/quoteSummary/${ticker}?modules=recommendationTrend`)
+    const data = await yf(`/v11/finance/quoteSummary/${ticker}?modules=recommendationTrend`)
     const trend = data?.quoteSummary?.result?.[0]?.recommendationTrend?.trend?.[0]
     if (!trend) return null
     return {
@@ -149,7 +137,7 @@ export async function getAnalystRatings(ticker: string) {
 
 export async function getPriceTarget(ticker: string) {
   try {
-    const data = await yf(`/v10/finance/quoteSummary/${ticker}?modules=financialData`)
+    const data = await yf(`/v11/finance/quoteSummary/${ticker}?modules=financialData`)
     const fd = data?.quoteSummary?.result?.[0]?.financialData
     if (!fd?.targetMeanPrice) return null
     return {
