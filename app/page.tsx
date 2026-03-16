@@ -125,8 +125,18 @@ export default function Dashboard() {
   const router = useRouter()
 
   useEffect(() => {
-    fetch('/api/market').then(r => r.json()).then(setData)
-    fetch('/api/market/indices').then(r => r.json()).then(d => setIndices(d ?? []))
+    fetch('/api/market')
+      .then(r => r.json())
+      .then(d => setData(d))
+      .catch(() => {})
+
+    fetch('/api/market/indices')
+      .then(r => r.json())
+      .then(d => {
+        const arr = Array.isArray(d) ? d : Object.values(d ?? {})
+        setIndices(arr)
+      })
+      .catch(() => {})
   }, [])
 
   const indexMap: Record<string, string> = {
@@ -158,7 +168,7 @@ export default function Dashboard() {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             {indices.length === 0
               ? Array.from({ length: 4 }).map((_, i) => <div key={i} className="skeleton h-24" />)
-              : indices.map((idx: any) => (
+              : indices.slice(0,4).map((idx: any) => (
                 <IndexCard key={idx.symbol}
                   symbol={idx.symbol}
                   name={indexMap[idx.symbol] ?? idx.symbol}
@@ -179,7 +189,7 @@ export default function Dashboard() {
               <TrendingUp size={14} className="text-[#00C853]" />
               <span className="text-sm font-semibold text-white">Mayores subas</span>
             </div>
-            {data?.movers?.gainers?.map((m: any) => (
+            {(Array.isArray(data?.movers?.gainers) ? data.movers.gainers : []).map((m: any) => (
               <MoverRow key={m.ticker || m.symbol} item={m}
                 onClick={() => router.push(`/stock/${m.ticker || m.symbol}`)} />
             )) ?? Array.from({ length: 5 }).map((_, i) => <div key={i} className="skeleton h-14 mx-4 my-2 rounded" />)}
@@ -191,7 +201,7 @@ export default function Dashboard() {
               <TrendingDown size={14} className="text-[#FF3860]" />
               <span className="text-sm font-semibold text-white">Mayores bajas</span>
             </div>
-            {data?.movers?.losers?.map((m: any) => (
+            {(Array.isArray(data?.movers?.losers) ? data.movers.losers : []).map((m: any) => (
               <MoverRow key={m.ticker || m.symbol} item={m}
                 onClick={() => router.push(`/stock/${m.ticker || m.symbol}`)} />
             )) ?? Array.from({ length: 5 }).map((_, i) => <div key={i} className="skeleton h-14 mx-4 my-2 rounded" />)}
@@ -207,7 +217,7 @@ export default function Dashboard() {
             <div className="card p-4">
               <p className="text-xs text-[#8899B4] uppercase tracking-wider mb-3">Sectores hoy</p>
               <div className="space-y-2">
-                {data?.sectors?.slice(0, 8).map((s: any) => {
+                {(Array.isArray(data?.sectors) ? data.sectors : []).slice(0, 8).map((s: any) => {
                   const pct = parseFloat(s.changesPercentage ?? s.change ?? '0')
                   const pos = pct >= 0
                   return (
