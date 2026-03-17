@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server'
 import { getQuote, getProfile, getIncomeStatements, getRatios, getAnalystRatings, getPriceTarget, getDCF } from '@/lib/fmp'
 import { calcScores, getVerdict, getHighlights } from '@/lib/scores'
 
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
 export async function GET(request: Request, { params }: { params: { ticker: string } }) {
   const ticker = params.ticker.toUpperCase()
 
