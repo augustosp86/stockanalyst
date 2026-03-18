@@ -1,201 +1,269 @@
-const AV = 'https://www.alphavantage.co/query'
-const KEY = process.env.ALPHA_VANTAGE_KEY
+// Yahoo Finance via RapidAPI proxy — completely free tier available
+// Uses yahoo-finance2 compatible endpoints that work from Vercel
 
-async function av(params: Record<string, string>) {
-  const qs = new URLSearchParams({ ...params, apikey: KEY! }).toString()
-  const res = await fetch(`${AV}?${qs}`, { next: { revalidate: 3600 } })
-  if (!res.ok) throw new Error(`AV error: ${res.status}`)
+const YH = 'https://query1.finance.yahoo.com'
+const YH2 = 'https://query2.finance.yahoo.com'
+
+const HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+  'Accept': '*/*',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Accept-Encoding': 'gzip, deflate, br',
+  'Referer': 'https://finance.yahoo.com',
+  'Origin': 'https://finance.yahoo.com',
+}
+
+async function yf(path: string, host = YH) {
+  const res = await fetch(`${host}${path}`, {
+    headers: HEADERS,
+    next: { revalidate: 300 },
+  })
+  if (!res.ok) throw new Error(`YF ${res.status}`)
   return res.json()
 }
 
-// Single call that returns everything — saves API quota
-async function getOverview(ticker: string) {
-  const data = await av({ function: 'OVERVIEW', symbol: ticker })
-  if (!data?.Symbol || data?.Note || data?.Information) return null
-  return data
+async function quoteSummary(ticker: string, modules: string) {
+  try {
+    // Try v11 first, fall back to v10
+    try {
+      const data = await yf(`/v11/finance/quoteSummary/${ticker}?modules=${modules}&corsDomain=finance.yahoo.com&crumb=`)
+      if (data?.quoteSummary?.result?.[0]) return data.quoteSummary.result[0]
+    } catch {}
+    const data = await yf(`/v10/finance/quoteSummary/${ticker}?modules=${modules}`)
+    return data?.quoteSummary?.result?.[0] ?? null
+  } catch { return null }
 }
 
 export async function getQuote(ticker: string) {
   try {
-    const data = await av({ function: 'GLOBAL_QUOTE', symbol: ticker })
-    if (data?.Note || data?.Information) return null
-    const q = data?.['Global Quote']
-    if (!q || !q['05. price']) return null
+    const data = await yf(`/v8/finance/chart/${ticker}?interval=1d&range=1d&includePrePost=false`)
+    const meta = data?.chart?.result?.[0]?.meta
+    if (!meta?.regularMarketPrice) return null
+    const prev = meta.previousClose ?? meta.chartPreviousClose ?? meta.regularMarketPrice
     return {
       symbol: ticker,
-      price: parseFloat(q['05. price']),
-      previousClose: parseFloat(q['08. previous close']),
-      open: parseFloat(q['02. open']),
-      dayHigh: parseFloat(q['03. high']),
-      dayLow: parseFloat(q['04. low']),
-      volume: parseInt(q['06. volume']),
-      avgVolume: 0,
-      marketCap: 0,
-      change: parseFloat(q['09. change']),
-      changesPercentage: parseFloat(q['10. change percent']?.replace('%', '')),
-      yearHigh: 0,
-      yearLow: 0,
-      pe: null,
+      price: meta.regularMarketPrice,
+      previousClose: prev,
+      open: meta.regularMarketOpen ?? meta.regularMarketPrice,
+      dayHigh: meta.regularMarketDayHigh ?? meta.regularMarketPrice,
+      dayLow: meta.regularMarketDayLow ?? meta.regularMarketPrice,
+      volume: meta.regularMarketVolume ?? 0,
+      avgVolume: meta.averageDailyVolume10Day ?? 0,
+      marketCap: meta.marketCap ?? 0,
+      change: meta.regularMarketPrice - prev,
+      changesPercentage: ((meta.regularMarketPrice - prev) / prev) * 100,
+      yearHigh: meta.fiftyTwoWeekHigh ?? 0,
+      yearLow: meta.fiftyTwoWeekLow ?? 0,
+      pe: meta.trailingPE ?? null,
       eps: null,
       beta: null,
-      currency: 'USD',
-      exchangeName: '',
+      currency: meta.currency ?? 'USD',
+      exchangeName: meta.exchangeName ?? '',
     }
   } catch { return null }
 }
 
 export async function getProfile(ticker: string) {
   try {
-    const data = await getOverview(ticker)
-    if (!data) return null
+    const result = await quoteSummary(ticker, 'assetProfile%2Cprice%2CsummaryDetail%2CdefaultKeyStatistics')
+    if (!result) return null
+    const asset = result.assetProfile ?? {}
+    const price = result.price ?? {}
+    const summary = result.summaryDetail ?? {}
+    const ks = result.defaultKeyStatistics ?? {}
     return {
       symbol: ticker,
-      companyName: data.Name ?? ticker,
-      sector: data.Sector ?? '',
-      industry: data.Industry ?? '',
-      country: data.Country ?? '',
-      ceo: '',
-      fullTimeEmployees: parseInt(data.FullTimeEmployees) || 0,
-      website: '',
-      description: data.Description ?? '',
+      companyName: price.longName ?? price.shortName ?? ticker,
+      sector: asset.sector ?? '',
+      industry: asset.industry ?? '',
+      country: asset.country ?? '',
+      ceo: asset.companyOfficers?.[0]?.name ?? '',
+      fullTimeEmployees: asset.fullTimeEmployees ?? 0,
+      website: asset.website ?? '',
+      description: asset.longBusinessSummary ?? '',
       image: '',
-      ipoDate: data.IPODate ?? '',
-      exchange: data.Exchange ?? '',
-      currency: data.Currency ?? 'USD',
-      marketCap: parseInt(data.MarketCapitalization) || 0,
-      pe: parseFloat(data.TrailingPE) || null,
-      eps: parseFloat(data.EPS) || null,
-      beta: parseFloat(data.Beta) || null,
-      yearHigh: parseFloat(data['52WeekHigh']) || 0,
-      yearLow: parseFloat(data['52WeekLow']) || 0,
-      dividendYield: parseFloat(data.DividendYield) || 0,
+      ipoDate: '',
+      exchange: price.exchangeName ?? '',
+      currency: price.currency ?? 'USD',
+      marketCap: price.marketCap?.raw ?? 0,
+      pe: summary.trailingPE?.raw ?? null,
+      eps: ks.trailingEps?.raw ?? null,
+      beta: summary.beta?.raw ?? null,
+      yearHigh: summary.fiftyTwoWeekHigh?.raw ?? 0,
+      yearLow: summary.fiftyTwoWeekLow?.raw ?? 0,
+      dividendYield: summary.dividendYield?.raw ?? 0,
     }
   } catch { return null }
 }
 
 export async function getRatios(ticker: string) {
   try {
-    const data = await getOverview(ticker)
-    if (!data) return null
+    const result = await quoteSummary(ticker, 'financialData%2CdefaultKeyStatistics%2CsummaryDetail')
+    if (!result) return null
+    const fd = result.financialData ?? {}
+    const ks = result.defaultKeyStatistics ?? {}
+    const sd = result.summaryDetail ?? {}
     return {
-      returnOnEquityTTM: parseFloat(data.ReturnOnEquityTTM) || null,
-      returnOnAssetsTTM: parseFloat(data.ReturnOnAssetsTTM) || null,
-      grossProfitMarginTTM: null,
-      operatingProfitMarginTTM: parseFloat(data.OperatingMarginTTM) || null,
-      netProfitMarginTTM: parseFloat(data.ProfitMargin) || null,
-      debtEquityRatioTTM: null,
-      currentRatioTTM: null,
-      quickRatioTTM: null,
-      freeCashFlowPerShareTTM: null,
-      priceEarningsRatioTTM: parseFloat(data.ForwardPE) || null,
-      pegRatioTTM: parseFloat(data.PEGRatio) || null,
-      pbRatioTTM: parseFloat(data.PriceToBookRatio) || null,
-      priceToSalesRatioTTM: parseFloat(data.PriceToSalesRatioTTM) || null,
-      enterpriseValueMultipleTTM: parseFloat(data.EVToEBITDA) || null,
-      dividendYieldTTM: parseFloat(data.DividendYield) || null,
+      returnOnEquityTTM: fd.returnOnEquity?.raw ?? null,
+      returnOnAssetsTTM: fd.returnOnAssets?.raw ?? null,
+      grossProfitMarginTTM: fd.grossMargins?.raw ?? null,
+      operatingProfitMarginTTM: fd.operatingMargins?.raw ?? null,
+      netProfitMarginTTM: fd.profitMargins?.raw ?? null,
+      debtEquityRatioTTM: fd.debtToEquity?.raw ? fd.debtToEquity.raw / 100 : null,
+      currentRatioTTM: fd.currentRatio?.raw ?? null,
+      quickRatioTTM: fd.quickRatio?.raw ?? null,
+      freeCashFlowPerShareTTM: ks.freeCashflow?.raw && ks.sharesOutstanding?.raw
+        ? ks.freeCashflow.raw / ks.sharesOutstanding.raw : null,
+      priceEarningsRatioTTM: sd.forwardPE?.raw ?? null,
+      pegRatioTTM: ks.pegRatio?.raw ?? null,
+      pbRatioTTM: ks.priceToBook?.raw ?? null,
+      priceToSalesRatioTTM: ks.priceToSalesTrailing12Months?.raw ?? null,
+      enterpriseValueMultipleTTM: ks.enterpriseToEbitda?.raw ?? null,
+      dividendYieldTTM: sd.dividendYield?.raw ?? null,
     }
   } catch { return null }
 }
 
 export async function getIncomeStatements(ticker: string) {
   try {
-    const data = await av({ function: 'INCOME_STATEMENT', symbol: ticker })
-    if (data?.Note || data?.Information) return []
-    return (data?.annualReports ?? []).slice(0, 5).map((r: any) => ({
-      date: r.fiscalDateEnding ?? '',
-      revenue: parseInt(r.totalRevenue) || 0,
-      grossProfit: parseInt(r.grossProfit) || 0,
-      operatingIncome: parseInt(r.operatingIncome) || 0,
-      netIncome: parseInt(r.netIncome) || 0,
-      eps: parseFloat(r.reportedEPS) || 0,
-      ebitda: parseInt(r.ebitda) || 0,
+    const result = await quoteSummary(ticker, 'incomeStatementHistory')
+    const stmts = result?.incomeStatementHistory?.incomeStatementHistory ?? []
+    return stmts.slice(0, 5).map((s: any) => ({
+      date: s.endDate?.fmt ?? '',
+      revenue: s.totalRevenue?.raw ?? 0,
+      grossProfit: s.grossProfit?.raw ?? 0,
+      operatingIncome: s.operatingIncome?.raw ?? 0,
+      netIncome: s.netIncome?.raw ?? 0,
+      eps: s.dilutedEPS?.raw ?? 0,
+      ebitda: s.ebitda?.raw ?? 0,
     }))
   } catch { return [] }
 }
 
 export async function getNews(ticker: string) {
   try {
-    const data = await av({ function: 'NEWS_SENTIMENT', tickers: ticker, limit: '10' })
-    if (data?.Note || data?.Information) return []
-    return (data?.feed ?? []).slice(0, 10).map((n: any) => ({
+    const data = await yf(`/v1/finance/search?q=${ticker}&newsCount=15&quotesCount=0`, YH2)
+    return (data?.news ?? []).slice(0, 15).map((n: any) => ({
       title: n.title,
-      url: n.url,
-      site: n.source,
-      publishedDate: n.time_published
-        ? new Date(n.time_published.replace(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/, '$1-$2-$3T$4:$5:$6')).toISOString()
+      url: n.link,
+      site: n.publisher,
+      publishedDate: n.providerPublishTime
+        ? new Date(n.providerPublishTime * 1000).toISOString()
         : new Date().toISOString(),
-      text: n.summary ?? '',
+      text: '',
     }))
   } catch { return [] }
 }
 
-export async function getAnalystRatings(_ticker: string) { return null }
-export async function getPriceTarget(_ticker: string) { return null }
+export async function getAnalystRatings(ticker: string) {
+  try {
+    const result = await quoteSummary(ticker, 'recommendationTrend')
+    const trend = result?.recommendationTrend?.trend?.[0]
+    if (!trend) return null
+    return {
+      analystRatingsbuy: trend.buy ?? 0,
+      analystRatingsHold: trend.hold ?? 0,
+      analystRatingsSell: trend.sell ?? 0,
+      analystRatingsStrongBuy: trend.strongBuy ?? 0,
+      analystRatingsStrongSell: trend.strongSell ?? 0,
+    }
+  } catch { return null }
+}
+
+export async function getPriceTarget(ticker: string) {
+  try {
+    const result = await quoteSummary(ticker, 'financialData')
+    const fd = result?.financialData
+    if (!fd?.targetMeanPrice) return null
+    return {
+      priceTarget: fd.targetMeanPrice?.raw ?? null,
+      priceTargetHigh: fd.targetHighPrice?.raw ?? null,
+      priceTargetLow: fd.targetLowPrice?.raw ?? null,
+      numberOfAnalysts: fd.numberOfAnalystOpinions?.raw ?? 0,
+    }
+  } catch { return null }
+}
+
 export async function getDCF(_ticker: string) { return null }
 
 export async function searchStocks(query: string) {
   try {
-    const data = await av({ function: 'SYMBOL_SEARCH', keywords: query })
-    if (data?.Note || data?.Information) return []
-    return (data?.bestMatches ?? []).slice(0, 8).map((r: any) => ({
-      symbol: r['1. symbol'],
-      name: r['2. name'],
-      exchangeShortName: r['4. region'],
-      stockExchange: r['3. type'],
-    }))
+    const data = await yf(`/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=8&newsCount=0`, YH2)
+    return (data?.quotes ?? [])
+      .filter((q: any) => q.quoteType === 'EQUITY')
+      .slice(0, 8)
+      .map((q: any) => ({
+        symbol: q.symbol,
+        name: q.longname ?? q.shortname ?? q.symbol,
+        exchangeShortName: q.exchange ?? '',
+        stockExchange: q.exchDisp ?? '',
+      }))
   } catch { return [] }
 }
 
 export async function getIndices() {
   const symbols = [
-    { symbol: 'SPY', name: 'S&P 500' },
-    { symbol: 'QQQ', name: 'NASDAQ 100' },
-    { symbol: 'DIA', name: 'Dow Jones' },
-    { symbol: 'IWM', name: 'Russell 2000' },
+    { symbol: '%5EGSPC', name: 'S&P 500' },
+    { symbol: '%5EIXIC', name: 'NASDAQ' },
+    { symbol: '%5EDJI', name: 'Dow Jones' },
+    { symbol: '%5ERUT', name: 'Russell 2000' },
   ]
-  const results = await Promise.all(symbols.map(async ({ symbol, name }) => {
-    try {
-      const data = await av({ function: 'GLOBAL_QUOTE', symbol })
-      if (data?.Note || data?.Information) return null
-      const q = data?.['Global Quote']
-      if (!q?.['05. price']) return null
-      return {
-        symbol, name,
-        price: parseFloat(q['05. price']),
-        changesPercentage: parseFloat(q['10. change percent']?.replace('%', '') ?? '0'),
-        change: parseFloat(q['09. change'] ?? '0'),
-      }
-    } catch { return null }
+  const results = await Promise.allSettled(symbols.map(async ({ symbol, name }) => {
+    const data = await yf(`/v8/finance/chart/${symbol}?interval=1d&range=1d`)
+    const meta = data?.chart?.result?.[0]?.meta
+    if (!meta?.regularMarketPrice) return null
+    const prev = meta.previousClose ?? meta.chartPreviousClose ?? meta.regularMarketPrice
+    return {
+      symbol: symbol.replace('%5E', '^'),
+      name,
+      price: meta.regularMarketPrice,
+      changesPercentage: ((meta.regularMarketPrice - prev) / prev) * 100,
+      change: meta.regularMarketPrice - prev,
+    }
   }))
-  return results.filter(Boolean)
+  return results.map(r => r.status === 'fulfilled' ? r.value : null).filter(Boolean)
 }
 
 export async function getGainersLosers() {
   try {
-    const data = await av({ function: 'TOP_GAINERS_LOSERS' })
-    if (data?.Note || data?.Information) return { gainers: [], losers: [], active: [] }
+    const [g, l] = await Promise.allSettled([
+      yf(`/v1/finance/screener?scrIds=day_gainers&count=6&region=US`, YH2),
+      yf(`/v1/finance/screener?scrIds=day_losers&count=6&region=US`, YH2),
+    ])
     const map = (item: any) => ({
-      symbol: item.ticker, ticker: item.ticker,
-      name: item.ticker, companyName: item.ticker,
-      price: parseFloat(item.price) || 0,
-      changesPercentage: parseFloat(item.change_percentage?.replace('%', '')) || 0,
+      symbol: item.symbol,
+      ticker: item.symbol,
+      name: item.shortName ?? item.symbol,
+      companyName: item.shortName ?? item.symbol,
+      price: item.regularMarketPrice ?? 0,
+      changesPercentage: item.regularMarketChangePercent ?? 0,
     })
-    return {
-      gainers: (data?.top_gainers ?? []).slice(0, 6).map(map),
-      losers: (data?.top_losers ?? []).slice(0, 6).map(map),
-      active: [],
-    }
+    const gainers = g.status === 'fulfilled' ? (g.value?.finance?.result?.[0]?.quotes ?? []).map(map) : []
+    const losers = l.status === 'fulfilled' ? (l.value?.finance?.result?.[0]?.quotes ?? []).map(map) : []
+    return { gainers, losers, active: [] }
   } catch { return { gainers: [], losers: [], active: [] } }
 }
 
 export async function getSectorPerformance() {
-  try {
-    const data = await av({ function: 'SECTOR' })
-    if (data?.Note || data?.Information) return []
-    const perf = data?.['Rank A: Real-Time Performance'] ?? {}
-    return Object.entries(perf).map(([sector, change]) => ({
-      sector,
-      changesPercentage: String(change).replace('%', ''),
-    }))
-  } catch { return [] }
+  const etfs = [
+    { symbol: 'XLK', sector: 'Technology' },
+    { symbol: 'XLV', sector: 'Healthcare' },
+    { symbol: 'XLF', sector: 'Financial Services' },
+    { symbol: 'XLY', sector: 'Consumer Cyclical' },
+    { symbol: 'XLC', sector: 'Communication Services' },
+    { symbol: 'XLI', sector: 'Industrials' },
+    { symbol: 'XLP', sector: 'Consumer Defensive' },
+    { symbol: 'XLE', sector: 'Energy' },
+  ]
+  const results = await Promise.allSettled(etfs.map(async ({ symbol, sector }) => {
+    try {
+      const data = await yf(`/v8/finance/chart/${symbol}?interval=1d&range=1d`)
+      const meta = data?.chart?.result?.[0]?.meta
+      if (!meta?.regularMarketPrice) return { sector, changesPercentage: '0' }
+      const prev = meta.previousClose ?? meta.chartPreviousClose ?? meta.regularMarketPrice
+      const pct = ((meta.regularMarketPrice - prev) / prev) * 100
+      return { sector, changesPercentage: pct.toFixed(2) }
+    } catch { return { sector, changesPercentage: '0' } }
+  }))
+  return results.map(r => r.status === 'fulfilled' ? r.value : null).filter(Boolean)
 }
