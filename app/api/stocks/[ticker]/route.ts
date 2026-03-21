@@ -1,46 +1,49 @@
 import { NextResponse } from 'next/server'
-import { getQuote, getProfile, getIncomeStatements, getRatios, getAnalystRatings, getPriceTarget, getDCF } from '@/lib/fmp'
+import { getQuote, getProfile, getRatios, getIncomeStatements } from '@/lib/fmp'
 import { calcScores, getVerdict, getHighlights } from '@/lib/scores'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 export async function GET(request: Request, { params }: { params: { ticker: string } }) {
   const ticker = params.ticker.toUpperCase()
-
   try {
-    const [quote, profile, income, ratios, analyst, priceTarget, dcf] = await Promise.allSettled([
+    // All use the same cached fetchAll() call internally — only 1 real HTTP request
+    const [quote, profile, ratios, income] = await Promise.allSettled([
       getQuote(ticker),
       getProfile(ticker),
-      getIncomeStatements(ticker),
       getRatios(ticker),
-      getAnalystRatings(ticker),
-      getPriceTarget(ticker),
-      getDCF(ticker),
+      getIncomeStatements(ticker),
     ])
 
     const q = quote.status === 'fulfilled' ? quote.value : null
     const p = profile.status === 'fulfilled' ? profile.value : null
-    const inc = income.status === 'fulfilled' ? income.value : []
     const rat = ratios.status === 'fulfilled' ? ratios.value : null
-    const an = analyst.status === 'fulfilled' ? analyst.value : null
-    const pt = priceTarget.status === 'fulfilled' ? priceTarget.value : null
-    const d = dcf.status === 'fulfilled' ? dcf.value : null
+    const inc = income.status === 'fulfilled' ? income.value : []
 
     if (!q) return NextResponse.json({ error: 'Ticker no encontrado' }, { status: 404 })
 
-    const scores = calcScores(rat, inc, q)
-    const verdict = getVerdict(scores, q)
-    const highlights = getHighlights(rat, inc, q)
+    const enrichedQuote = {
+      ...q,
+      marketCap: q.marketCap || p?.marketCap || 0,
+      yearHigh: q.yearHigh || p?.yearHigh || 0,
+      yearLow: q.yearLow || p?.yearLow || 0,
+      pe: q.pe || p?.pe || null,
+      eps: q.eps || p?.eps || null,
+      beta: q.beta || p?.beta || null,
+    }
+
+    const scores = calcScores(rat, inc, enrichedQuote)
+    const verdict = getVerdict(scores, enrichedQuote)
+    const highlights = getHighlights(rat, inc, enrichedQuote)
 
     return NextResponse.json({
-      quote: q,
+      quote: enrichedQuote,
       profile: p,
       income: inc,
       ratios: rat,
-      analyst: an,
-      priceTarget: pt,
-      dcf: d,
+      analyst: null,
+      priceTarget: null,
+      dcf: null,
       scores,
       verdict,
       highlights,
