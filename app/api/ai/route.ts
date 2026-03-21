@@ -1,35 +1,33 @@
 import Anthropic from '@anthropic-ai/sdk'
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+export const dynamic = 'force-dynamic'
 
 export async function POST(request: Request) {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) {
+    return new Response('Error: ANTHROPIC_API_KEY no configurada', { status: 500 })
+  }
+
+  const anthropic = new Anthropic({ apiKey })
   const { ticker, data, lang } = await request.json()
-  const es = lang === 'es'
 
   const q = data?.quote
-  const r = data?.ratios
   const s = data?.scores
-  const inc = data?.income?.[0] ?? {}
-  const incPrev = data?.income?.[1] ?? {}
-  const revGrowth = incPrev.revenue
-    ? (((inc.revenue - incPrev.revenue) / Math.abs(incPrev.revenue)) * 100).toFixed(1)
-    : 'N/A'
+  const p = data?.profile
 
   const context = `
-Ticker: ${ticker} | ${data?.profile?.companyName ?? ''} | Sector: ${data?.profile?.sector ?? ''}
+Ticker: ${ticker} | ${p?.companyName ?? ''} | Sector: ${p?.sector ?? ''}
 Precio: $${q?.price?.toFixed(2)} | Cambio: ${q?.changesPercentage?.toFixed(2)}%
-P/E: ${q?.pe?.toFixed(1)} | Market Cap: $${((q?.marketCap ?? 0) / 1e9).toFixed(1)}B
-Crecimiento ingresos: ${revGrowth}% | Margen neto: ${(r?.netProfitMarginTTM * 100)?.toFixed(1)}%
-ROE: ${(r?.returnOnEquityTTM * 100)?.toFixed(1)}% | Deuda/Capital: ${r?.debtEquityRatioTTM?.toFixed(2)}x
-Score general: ${s?.overall}/10 | Fundamentales: ${s?.fundamentals} | Crecimiento: ${s?.growth} | Salud: ${s?.financial_health}
-Veredicto calculado: ${data?.verdict}
-  `.trim()
+Market Cap: $${((q?.marketCap ?? 0) / 1e9).toFixed(1)}B
+Score general: ${s?.overall}/10 | Veredicto: ${data?.verdict}
+P/E: ${q?.pe?.toFixed(1) ?? 'N/A'} | Beta: ${q?.beta?.toFixed(2) ?? 'N/A'}
+`.trim()
 
-  const system = es
+  const system = lang === 'es'
     ? 'Eres un analista financiero experto. Análisis claro, directo y profesional. Máximo 3 párrafos cortos.'
     : 'You are an expert financial analyst. Clear, direct and professional. Maximum 3 short paragraphs.'
 
-  const prompt = es
+  const prompt = lang === 'es'
     ? `Analiza ${ticker} basándote en estos datos y da una conclusión de inversión clara:\n\n${context}`
     : `Analyze ${ticker} based on this data and give a clear investment conclusion:\n\n${context}`
 
@@ -49,8 +47,12 @@ Veredicto calculado: ${data?.verdict}
             controller.enqueue(encoder.encode(chunk.delta.text))
           }
         }
-      } catch (err) {
-        controller.enqueue(encoder.encode(es ? 'Error al generar análisis.' : 'Error generating analysis.'))
+      } catch (err: any) {
+        console.error('Anthropic error:', err?.message)
+        controller.enqueue(encoder.encode(lang === 'es'
+          ? 'Error al conectar con el servicio de IA.'
+          : 'Error connecting to AI service.'
+        ))
       } finally {
         controller.close()
       }
@@ -60,7 +62,6 @@ Veredicto calculado: ${data?.verdict}
   return new Response(stream, {
     headers: {
       'Content-Type': 'text/plain; charset=utf-8',
-      'Transfer-Encoding': 'chunked',
       'Cache-Control': 'no-cache',
     },
   })
